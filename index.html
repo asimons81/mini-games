@@ -1,0 +1,500 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Neon Space Shooter</title>
+  <style>
+    :root {
+      --bg: #050814;
+      --panel: #0a1024;
+      --cyan: #00e5ff;
+      --red: #ff2d55;
+      --yellow: #ffd60a;
+      --text: #d8e6ff;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 20% 20%, #112 0%, transparent 40%),
+        radial-gradient(circle at 80% 30%, #113 0%, transparent 45%),
+        linear-gradient(180deg, #04060f 0%, #02030a 100%);
+      color: var(--text);
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+
+    .wrap {
+      width: min(92vw, 960px);
+      display: grid;
+      gap: 10px;
+    }
+
+    .hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, rgba(15, 24, 58, 0.85), rgba(8, 12, 30, 0.85));
+      border: 1px solid rgba(0, 229, 255, 0.35);
+      border-radius: 10px;
+      box-shadow: 0 0 18px rgba(0, 229, 255, 0.15);
+      letter-spacing: 0.04em;
+      font-weight: 700;
+      font-size: clamp(12px, 1.8vw, 16px);
+    }
+
+    #game {
+      width: 100%;
+      height: min(72vh, 720px);
+      display: block;
+      background: radial-gradient(circle at center, #070b1f 0%, #03050d 70%);
+      border: 1px solid rgba(255, 45, 85, 0.4);
+      border-radius: 12px;
+      box-shadow:
+        0 0 20px rgba(255, 45, 85, 0.18),
+        0 0 30px rgba(0, 229, 255, 0.1) inset;
+    }
+
+    .controls {
+      text-align: center;
+      opacity: 0.85;
+      font-size: clamp(12px, 1.6vw, 14px);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hud">
+      <span id="scoreText">Score: 0</span>
+      <span id="livesText">Lives: 3</span>
+      <span id="highScoreText">High Score: 0</span>
+    </div>
+    <canvas id="game" width="960" height="720" aria-label="Space shooter game"></canvas>
+    <p class="controls">Controls: Left/Right arrows to move, Space to shoot, Enter to restart</p>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById("game");
+      const ctx = canvas.getContext("2d");
+
+      const scoreText = document.getElementById("scoreText");
+      const livesText = document.getElementById("livesText");
+      const highScoreText = document.getElementById("highScoreText");
+
+      const W = () => canvas.width;
+      const H = () => canvas.height;
+
+      const KEY = { left: false, right: false, shoot: false };
+      const STORAGE_KEY = "neon-space-shooter-high-score";
+
+      const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+      let stars = [];
+      let bullets = [];
+      let enemies = [];
+      let particles = [];
+      let score = 0;
+      let lives = 3;
+      let highScore = Number(localStorage.getItem(STORAGE_KEY) || 0);
+      let gameOver = false;
+      let spawnTimer = 0;
+      let wave = 1;
+      let shakeTime = 0;
+      let shakePower = 0;
+      let shootCooldown = 0;
+      let enemySpeedScale = 1;
+
+      const player = {
+        x: W() * 0.5,
+        y: H() - 70,
+        w: 36,
+        h: 44,
+        speed: 460,
+        invuln: 0
+      };
+
+      function makeStars() {
+        stars = [];
+        const layers = [
+          { count: 55, speed: 22, size: [0.8, 1.4], alpha: [0.2, 0.4] },
+          { count: 40, speed: 42, size: [1.2, 2.2], alpha: [0.35, 0.6] },
+          { count: 30, speed: 72, size: [1.7, 3.2], alpha: [0.5, 0.85] }
+        ];
+        layers.forEach((layer, layerIndex) => {
+          for (let i = 0; i < layer.count; i++) {
+            stars.push({
+              x: Math.random() * W(),
+              y: Math.random() * H(),
+              speed: layer.speed + Math.random() * 10,
+              size: layer.size[0] + Math.random() * (layer.size[1] - layer.size[0]),
+              alpha: layer.alpha[0] + Math.random() * (layer.alpha[1] - layer.alpha[0]),
+              layer: layerIndex
+            });
+          }
+        });
+      }
+
+      function resetGame() {
+        bullets = [];
+        enemies = [];
+        particles = [];
+        score = 0;
+        lives = 3;
+        wave = 1;
+        enemySpeedScale = 1;
+        gameOver = false;
+        spawnTimer = 0;
+        shakeTime = 0;
+        shakePower = 0;
+        shootCooldown = 0;
+        player.x = W() * 0.5;
+        player.invuln = 1.2;
+        updateHud();
+      }
+
+      function updateHud() {
+        scoreText.textContent = `Score: ${score}`;
+        livesText.textContent = `Lives: ${lives}`;
+        highScoreText.textContent = `High Score: ${highScore}`;
+      }
+
+      function spawnWave() {
+        const cols = 6 + Math.min(4, Math.floor(wave / 2));
+        const enemyCount = 4 + Math.min(10, wave + 2);
+        const spacing = W() / (cols + 1);
+        const picked = new Set();
+
+        while (picked.size < enemyCount) {
+          picked.add(Math.floor(Math.random() * cols) + 1);
+        }
+
+        picked.forEach((col) => {
+          enemies.push({
+            x: col * spacing + (Math.random() * 20 - 10),
+            y: -20 - Math.random() * 240,
+            r: 17,
+            speed: (120 + Math.random() * 70) * enemySpeedScale,
+            sway: Math.random() * Math.PI * 2,
+            swayRate: 0.8 + Math.random() * 1.6
+          });
+        });
+
+        wave += 1;
+        enemySpeedScale = 1 + Math.min(1.6, wave * 0.04);
+      }
+
+      function shoot() {
+        bullets.push({
+          x: player.x,
+          y: player.y - player.h * 0.6,
+          r: 4.8,
+          speed: 640
+        });
+      }
+
+      function makeExplosion(x, y, color, count = 24) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const speed = 80 + Math.random() * 280;
+          particles.push({
+            x,
+            y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            life: 0.3 + Math.random() * 0.5,
+            maxLife: 0.3 + Math.random() * 0.5,
+            size: 1.6 + Math.random() * 3.4,
+            color
+          });
+        }
+      }
+
+      function triggerShake(power = 8, duration = 0.22) {
+        shakePower = Math.max(shakePower, power);
+        shakeTime = Math.max(shakeTime, duration);
+      }
+
+      function circleHit(a, b) {
+        const dx = a.x - b.x;
+        const dy = a.y - b.y;
+        const rr = a.r + b.r;
+        return dx * dx + dy * dy <= rr * rr;
+      }
+
+      function hitPlayer(enemy) {
+        if (player.invuln > 0) return;
+        lives -= 1;
+        player.invuln = 1.2;
+        triggerShake(14, 0.28);
+        makeExplosion(player.x, player.y - 12, "#00e5ff", 32);
+        makeExplosion(enemy.x, enemy.y, "#ff2d55", 20);
+        enemy.dead = true;
+
+        if (lives <= 0) {
+          gameOver = true;
+          if (score > highScore) {
+            highScore = score;
+            localStorage.setItem(STORAGE_KEY, String(highScore));
+          }
+        }
+      }
+
+      function update(dt) {
+        stars.forEach((s) => {
+          s.y += s.speed * dt;
+          if (s.y > H() + s.size) {
+            s.y = -s.size;
+            s.x = Math.random() * W();
+          }
+        });
+
+        if (gameOver) return;
+
+        player.invuln = Math.max(0, player.invuln - dt);
+        shootCooldown = Math.max(0, shootCooldown - dt);
+        shakeTime = Math.max(0, shakeTime - dt);
+
+        const dir = (KEY.right ? 1 : 0) - (KEY.left ? 1 : 0);
+        player.x += dir * player.speed * dt;
+        player.x = clamp(player.x, player.w * 0.6, W() - player.w * 0.6);
+
+        if (KEY.shoot && shootCooldown <= 0) {
+          shoot();
+          shootCooldown = 0.14;
+        }
+
+        spawnTimer -= dt;
+        if (spawnTimer <= 0) {
+          spawnWave();
+          spawnTimer = Math.max(0.55, 1.7 - wave * 0.04);
+        }
+
+        bullets.forEach((b) => {
+          b.y -= b.speed * dt;
+        });
+        bullets = bullets.filter((b) => b.y > -20);
+
+        enemies.forEach((e) => {
+          e.sway += e.swayRate * dt;
+          e.x += Math.sin(e.sway) * 38 * dt;
+          e.y += e.speed * dt;
+
+          if (e.y > H() + 30) {
+            e.dead = true;
+            if (player.invuln <= 0) hitPlayer(e);
+          } else if (circleHit({ x: player.x, y: player.y - 6, r: 18 }, e)) {
+            hitPlayer(e);
+          }
+        });
+
+        for (let bi = bullets.length - 1; bi >= 0; bi--) {
+          const b = bullets[bi];
+          for (let ei = enemies.length - 1; ei >= 0; ei--) {
+            const e = enemies[ei];
+            if (!e.dead && circleHit(b, e)) {
+              e.dead = true;
+              bullets.splice(bi, 1);
+              score += 100;
+              makeExplosion(e.x, e.y, "#ff2d55", 24);
+              break;
+            }
+          }
+        }
+
+        enemies = enemies.filter((e) => !e.dead);
+
+        particles.forEach((p) => {
+          p.life -= dt;
+          p.vx *= 0.98;
+          p.vy *= 0.98;
+          p.vy += 18 * dt;
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+        });
+        particles = particles.filter((p) => p.life > 0);
+
+        if (score > highScore) highScore = score;
+        updateHud();
+      }
+
+      function drawStars() {
+        stars.forEach((s) => {
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+          const hue = s.layer === 2 ? "180,100%,70%" : s.layer === 1 ? "200,90%,72%" : "220,80%,75%";
+          ctx.fillStyle = `hsla(${hue},${s.alpha})`;
+          ctx.fill();
+        });
+      }
+
+      function drawPlayer() {
+        const flash = player.invuln > 0 && Math.floor(player.invuln * 14) % 2 === 0;
+        if (flash) return;
+
+        ctx.save();
+        ctx.translate(player.x, player.y);
+        ctx.shadowColor = "#00e5ff";
+        ctx.shadowBlur = 16;
+
+        ctx.beginPath();
+        ctx.moveTo(0, -player.h * 0.55);
+        ctx.lineTo(-player.w * 0.45, player.h * 0.45);
+        ctx.lineTo(player.w * 0.45, player.h * 0.45);
+        ctx.closePath();
+        ctx.fillStyle = "#00e5ff";
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(0, player.h * 0.18);
+        ctx.lineTo(-player.w * 0.2, player.h * 0.45);
+        ctx.lineTo(player.w * 0.2, player.h * 0.45);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,255,255,0.95)";
+        ctx.fill();
+        ctx.restore();
+      }
+
+      function drawBullets() {
+        ctx.save();
+        ctx.shadowColor = "#ffd60a";
+        ctx.shadowBlur = 10;
+        bullets.forEach((b) => {
+          ctx.beginPath();
+          ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffd60a";
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+
+      function drawEnemies() {
+        ctx.save();
+        ctx.shadowColor = "#ff2d55";
+        ctx.shadowBlur = 12;
+        enemies.forEach((e) => {
+          ctx.beginPath();
+          ctx.moveTo(e.x, e.y + e.r * 1.1);
+          ctx.lineTo(e.x - e.r * 0.95, e.y - e.r * 0.8);
+          ctx.lineTo(e.x + e.r * 0.95, e.y - e.r * 0.8);
+          ctx.closePath();
+          ctx.fillStyle = "#ff2d55";
+          ctx.fill();
+
+          ctx.beginPath();
+          ctx.arc(e.x, e.y - e.r * 0.15, e.r * 0.25, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(255,255,255,0.9)";
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+
+      function drawParticles() {
+        particles.forEach((p) => {
+          const t = p.life / p.maxLife;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * t, 0, Math.PI * 2);
+          ctx.fillStyle = p.color.startsWith("#")
+            ? `${p.color}${Math.round(t * 255).toString(16).padStart(2, "0")}`
+            : p.color;
+          ctx.fill();
+        });
+      }
+
+      function drawOverlay() {
+        if (!gameOver) return;
+        ctx.save();
+        ctx.fillStyle = "rgba(3, 6, 18, 0.74)";
+        ctx.fillRect(0, 0, W(), H());
+
+        ctx.textAlign = "center";
+        ctx.fillStyle = "#ff2d55";
+        ctx.shadowColor = "#ff2d55";
+        ctx.shadowBlur = 16;
+        ctx.font = "700 68px Trebuchet MS";
+        ctx.fillText("GAME OVER", W() * 0.5, H() * 0.43);
+
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = "#d8e6ff";
+        ctx.font = "700 28px Trebuchet MS";
+        ctx.fillText(`Score: ${score}`, W() * 0.5, H() * 0.53);
+        ctx.fillText(`High Score: ${highScore}`, W() * 0.5, H() * 0.59);
+
+        ctx.shadowBlur = 0;
+        ctx.font = "600 22px Trebuchet MS";
+        ctx.fillStyle = "#00e5ff";
+        ctx.fillText("Press Enter to Restart", W() * 0.5, H() * 0.68);
+        ctx.restore();
+      }
+
+      let last = performance.now();
+      function frame(now) {
+        const dt = Math.min(0.033, (now - last) / 1000);
+        last = now;
+        update(dt);
+
+        const sx = shakeTime > 0 ? (Math.random() * 2 - 1) * shakePower : 0;
+        const sy = shakeTime > 0 ? (Math.random() * 2 - 1) * shakePower : 0;
+
+        ctx.clearRect(0, 0, W(), H());
+        ctx.save();
+        ctx.translate(sx, sy);
+        drawStars();
+        drawBullets();
+        drawEnemies();
+        drawParticles();
+        drawPlayer();
+        ctx.restore();
+        drawOverlay();
+        requestAnimationFrame(frame);
+      }
+
+      function resizeCanvas() {
+        const rect = canvas.getBoundingClientRect();
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(640, Math.floor(rect.width * ratio));
+        const height = Math.max(420, Math.floor(rect.height * ratio));
+        canvas.width = width;
+        canvas.height = height;
+        player.y = H() - 70 * ratio;
+        player.w = 36 * ratio;
+        player.h = 44 * ratio;
+        makeStars();
+      }
+
+      window.addEventListener("resize", resizeCanvas);
+
+      window.addEventListener("keydown", (e) => {
+        if (e.code === "ArrowLeft") KEY.left = true;
+        if (e.code === "ArrowRight") KEY.right = true;
+        if (e.code === "Space") {
+          KEY.shoot = true;
+          e.preventDefault();
+        }
+        if (gameOver && e.code === "Enter") resetGame();
+      });
+
+      window.addEventListener("keyup", (e) => {
+        if (e.code === "ArrowLeft") KEY.left = false;
+        if (e.code === "ArrowRight") KEY.right = false;
+        if (e.code === "Space") KEY.shoot = false;
+      });
+
+      highScoreText.textContent = `High Score: ${highScore}`;
+      resizeCanvas();
+      resetGame();
+      requestAnimationFrame(frame);
+    })();
+  </script>
+</body>
+</html>
