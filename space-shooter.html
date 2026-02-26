@@ -80,7 +80,7 @@
       <span id="highScoreText">High Score: 0</span>
     </div>
     <canvas id="game" width="960" height="720" aria-label="Space shooter game"></canvas>
-    <p class="controls">Controls: Left/Right arrows to move, Space to shoot, Enter to restart</p>
+    <p class="controls">🖥️ Arrows + Space &nbsp;|&nbsp; 📱 Tap sides to move, center to shoot &nbsp;|&nbsp; Enter to restart</p>
   </div>
 
   <script>
@@ -489,6 +489,52 @@
         if (e.code === "ArrowRight") KEY.right = false;
         if (e.code === "Space") KEY.shoot = false;
       });
+
+      // Touch controls for mobile
+      canvas.addEventListener("touchstart", (e) => {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        const touch = e.touches[0];
+        const x = (touch.clientX - rect.left) / rect.width;
+        
+        if (gameOver) {
+          resetGame();
+          return;
+        }
+        
+        if (x < 0.35) {
+          KEY.left = true;
+          KEY.right = false;
+        } else if (x > 0.65) {
+          KEY.right = true;
+          KEY.left = false;
+        } else {
+          KEY.shoot = true;
+        }
+      }, { passive: false });
+
+      canvas.addEventListener("touchend", (e) => {
+        e.preventDefault();
+        KEY.left = false;
+        KEY.right = false;
+        KEY.shoot = false;
+      }, { passive: false });
+
+      // Also handle multi-touch for move + shoot simultaneously
+      canvas.addEventListener("touchmove", (e) => {
+        e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        let left = false, right = false;
+        
+        for (let i = 0; i < e.touches.length; i++) {
+          const x = (e.touches[i].clientX - rect.left) / rect.width;
+          if (x < 0.4) left = true;
+          if (x > 0.6) right = true;
+        }
+        
+        KEY.left = left;
+        KEY.right = right;
+      }, { passive: false });
 
       highScoreText.textContent = `High Score: ${highScore}`;
       resizeCanvas();
