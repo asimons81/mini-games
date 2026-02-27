@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NEON PULSE</title>
+  <style>
+    :root {
+      --bg: #05070f;
+      --cyan: #22f0ff;
+      --magenta: #ff2bbf;
+      --electric: #3a66ff;
+      --text: #e8f6ff;
+    }
+
+    * {
+      box-sizing: border-box;
+      user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at 20% 10%, #0a1631, var(--bg) 55%),
+                  radial-gradient(circle at 85% 90%, #190c27, transparent 42%);
+      color: var(--text);
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      letter-spacing: 0.06em;
+    }
+
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    .hud {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 14px;
+      z-index: 5;
+      pointer-events: none;
+    }
+
+    .pill {
+      min-width: 140px;
+      text-align: center;
+      padding: 10px 14px;
+      border: 1px solid rgba(34, 240, 255, 0.45);
+      border-radius: 999px;
+      background: rgba(4, 12, 26, 0.65);
+      backdrop-filter: blur(4px);
+      box-shadow: 0 0 12px rgba(58, 102, 255, 0.35);
+      font-size: 13px;
+      text-transform: uppercase;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 8;
+      background: rgba(3, 6, 14, 0.55);
+      text-align: center;
+      cursor: pointer;
+      transition: opacity 180ms ease;
+    }
+
+    .overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .panel {
+      padding: 28px 32px;
+      border: 1px solid rgba(255, 43, 191, 0.45);
+      border-radius: 16px;
+      background: linear-gradient(150deg, rgba(9, 15, 30, 0.9), rgba(6, 12, 28, 0.72));
+      box-shadow: 0 0 42px rgba(34, 240, 255, 0.2), 0 0 16px rgba(255, 43, 191, 0.26);
+      max-width: min(92vw, 560px);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 58px);
+      color: var(--cyan);
+      text-shadow: 0 0 12px rgba(34, 240, 255, 0.85), 0 0 26px rgba(34, 240, 255, 0.35);
+    }
+
+    p {
+      margin: 8px 0;
+      opacity: 0.95;
+      line-height: 1.5;
+      font-size: clamp(12px, 1.8vw, 16px);
+    }
+
+    .accent {
+      color: var(--magenta);
+      text-shadow: 0 0 12px rgba(255, 43, 191, 0.75);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div class="pill" id="scorePill">Score: 0</div>
+    <div class="pill" id="comboPill">Combo x1.0</div>
+    <div class="pill" id="highPill">High: 0</div>
+  </div>
+
+  <div class="overlay" id="startOverlay">
+    <div class="panel">
+      <h1>NEON PULSE</h1>
+      <p>Move with <span class="accent">Arrow Keys</span> or <span class="accent">WASD</span>.</p>
+      <p>Dodge incoming neon walls. Stay alive to build your combo multiplier.</p>
+      <p class="accent">Click to Start</p>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="gameOverOverlay">
+    <div class="panel">
+      <h1>GAME OVER</h1>
+      <p id="finalScoreText">Score: 0</p>
+      <p id="finalHighText">High Score: 0</p>
+      <p class="accent">Click to Restart</p>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const scorePill = document.getElementById('scorePill');
+    const comboPill = document.getElementById('comboPill');
+    const highPill = document.getElementById('highPill');
+
+    const startOverlay = document.getElementById('startOverlay');
+    const gameOverOverlay = document.getElementById('gameOverOverlay');
+    const finalScoreText = document.getElementById('finalScoreText');
+    const finalHighText = document.getElementById('finalHighText');
+
+    const STORAGE_KEY = 'neon-pulse-high-score';
+    let highScore = Number(localStorage.getItem(STORAGE_KEY) || 0);
+
+    const keys = new Set();
+    const particles = [];
+    const obstacles = [];
+
+    let running = false;
+    let gameOver = false;
+
+    const game = {
+      score: 0,
+      combo: 1,
+      comboTimer: 0,
+      difficulty: 1,
+      elapsed: 0,
+      lastTime: 0,
+      obstacleTimer: 0,
+      beatTimer: 0,
+      beatPulse: 0,
+      bpm: 128,
+      baseSpeed: 190
+    };
+
+    const player = {
+      x: 0,
+      y: 0,
+      r: 14,
+      speed: 290,
+      glow: 0
+    };
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      if (!running) {
+        player.x = canvas.width / 2;
+        player.y = canvas.height * 0.76;
+      }
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function rand(min, max) {
+      return Math.random() * (max - min) + min;
+    }
+
+    function createParticle(x, y, color, amount = 1) {
+      for (let i = 0; i < amount; i++) {
+        particles.push({
+          x,
+          y,
+          vx: rand(-85, 85),
+          vy: rand(-95, 80),
+          life: rand(0.35, 0.9),
+          t: 0,
+          size: rand(1.8, 4.5),
+          color
+        });
+      }
+    }
+
+    function spawnWallPattern() {
+      const laneCount = 7;
+      const laneW = canvas.width / laneCount;
+      const gapSize = Math.floor(rand(1, 3));
+      let gapStart = Math.floor(rand(0, laneCount - gapSize + 0.99));
+
+      // Rare rhythm fake-out: two smaller pass lanes.
+      const splitGap = Math.random() < 0.18;
+      let secondaryStart = -1;
+      if (splitGap && laneCount > 5) {
+        secondaryStart = (gapStart + Math.floor(rand(2, laneCount - 1))) % laneCount;
+      }
+
+      for (let lane = 0; lane < laneCount; lane++) {
+        const inMainGap = lane >= gapStart && lane < gapStart + gapSize;
+        const inSecondaryGap = splitGap && lane === secondaryStart;
+        if (inMainGap || inSecondaryGap) continue;
+
+        const x = lane * laneW;
+        const w = laneW + 1;
+        const h = rand(34, 52);
+        const speed = game.baseSpeed + game.difficulty * rand(30, 95);
+        obstacles.push({
+          x,
+          y: -h - 6,
+          w,
+          h,
+          speed,
+          color: Math.random() < 0.5 ? '#22f0ff' : '#ff2bbf',
+          scored: false
+        });
+      }
+    }
+
+    function spawnCrossPattern() {
+      const t = rand(22, 30);
+      const gap = rand(92, 150);
+      const cx = rand(canvas.width * 0.26, canvas.width * 0.74);
+      const cy = -130;
+      const speed = game.baseSpeed + game.difficulty * rand(55, 110);
+
+      const pieces = [
+        { x: cx - gap / 2 - t, y: cy, w: t, h: 260 },
+        { x: cx + gap / 2, y: cy, w: t, h: 260 },
+        { x: cx - 180, y: cy + 85, w: 160, h: t },
+        { x: cx + 20, y: cy + 85, w: 160, h: t }
+      ];
+
+      for (const p of pieces) {
+        obstacles.push({
+          ...p,
+          speed,
+          color: Math.random() < 0.5 ? '#3a66ff' : '#22f0ff',
+          scored: false
+        });
+      }
+    }
+
+    function spawnObstacle() {
+      const mode = Math.random();
+      if (mode < 0.72) {
+        spawnWallPattern();
+      } else {
+        spawnCrossPattern();
+      }
+    }
+
+    function resetGame() {
+      running = true;
+      gameOver = false;
+      obstacles.length = 0;
+      particles.length = 0;
+
+      game.score = 0;
+      game.combo = 1;
+      game.comboTimer = 0;
+      game.difficulty = 1;
+      game.elapsed = 0;
+      game.lastTime = performance.now();
+      game.obstacleTimer = 0;
+      game.beatTimer = 0;
+      game.beatPulse = 0;
+
+      player.x = canvas.width / 2;
+      player.y = canvas.height * 0.76;
+      player.glow = 0;
+
+      scorePill.textContent = 'Score: 0';
+      comboPill.textContent = 'Combo x1.0';
+      highPill.textContent = `High: ${Math.floor(highScore)}`;
+
+      startOverlay.classList.add('hidden');
+      gameOverOverlay.classList.add('hidden');
+    }
+
+    function endGame() {
+      running = false;
+      gameOver = true;
+
+      if (game.score > highScore) {
+        highScore = Math.floor(game.score);
+        localStorage.setItem(STORAGE_KEY, String(highScore));
+      }
+
+      finalScoreText.textContent = `Score: ${Math.floor(game.score)}`;
+      finalHighText.textContent = `High Score: ${Math.floor(highScore)}`;
+      highPill.textContent = `High: ${Math.floor(highScore)}`;
+      gameOverOverlay.classList.remove('hidden');
+    }
+
+    function collideCircleRect(cx, cy, cr, r) {
+      const nx = clamp(cx, r.x, r.x + r.w);
+      const ny = clamp(cy, r.y, r.y + r.h);
+      const dx = cx - nx;
+      const dy = cy - ny;
+      return dx * dx + dy * dy < cr * cr;
+    }
+
+    function update(dt) {
+      const beatInterval = 60 / game.bpm;
+      game.elapsed += dt;
+      game.beatTimer += dt;
+      game.obstacleTimer += dt;
+      game.comboTimer += dt;
+
+      game.difficulty = 1 + game.elapsed * 0.05;
+      game.baseSpeed = 180 + game.elapsed * 5.3;
+
+      if (game.beatTimer >= beatInterval) {
+        game.beatTimer -= beatInterval;
+        game.beatPulse = 1;
+        player.glow = 1;
+        createParticle(player.x, player.y, '#22f0ff', 4);
+      }
+
+      game.beatPulse = Math.max(0, game.beatPulse - dt * 2.9);
+      player.glow = Math.max(0, player.glow - dt * 4.1);
+
+      const spawnGap = clamp(1.2 - game.difficulty * 0.06, 0.42, 1.05);
+      if (game.obstacleTimer >= spawnGap) {
+        game.obstacleTimer = 0;
+        spawnObstacle();
+      }
+
+      let mx = 0;
+      let my = 0;
+      if (keys.has('arrowleft') || keys.has('a')) mx -= 1;
+      if (keys.has('arrowright') || keys.has('d')) mx += 1;
+      if (keys.has('arrowup') || keys.has('w')) my -= 1;
+      if (keys.has('arrowdown') || keys.has('s')) my += 1;
+
+      if (mx !== 0 || my !== 0) {
+        const len = Math.hypot(mx, my) || 1;
+        player.x += (mx / len) * player.speed * dt;
+        player.y += (my / len) * player.speed * dt;
+      }
+
+      player.x = clamp(player.x, player.r + 4, canvas.width - player.r - 4);
+      player.y = clamp(player.y, player.r + 4, canvas.height - player.r - 4);
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const o = obstacles[i];
+        o.y += o.speed * dt;
+
+        if (!o.scored && o.y > player.y + player.r) {
+          o.scored = true;
+          game.combo = clamp(game.combo + 0.06, 1, 8);
+          game.comboTimer = 0;
+          const add = 10 * game.combo;
+          game.score += add;
+          createParticle(player.x, player.y + 6, '#3a66ff', 3);
+        }
+
+        if (collideCircleRect(player.x, player.y, player.r + 1.5, o)) {
+          createParticle(player.x, player.y, '#ff2bbf', 38);
+          endGame();
+          break;
+        }
+
+        if (o.y > canvas.height + 70) {
+          obstacles.splice(i, 1);
+        }
+      }
+
+      if (game.comboTimer > 1.2) {
+        game.combo = Math.max(1, game.combo - dt * 0.95);
+      }
+
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.t += dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.985;
+        p.vy += 180 * dt;
+
+        if (p.t >= p.life) particles.splice(i, 1);
+      }
+
+      scorePill.textContent = `Score: ${Math.floor(game.score)}`;
+      comboPill.textContent = `Combo x${game.combo.toFixed(1)}`;
+    }
+
+    function drawGrid(time) {
+      const step = 48;
+      const drift = (time * 34) % step;
+
+      ctx.save();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = 'rgba(58,102,255,0.14)';
+
+      for (let x = -step; x < canvas.width + step; x += step) {
+        ctx.beginPath();
+        ctx.moveTo(x + drift, 0);
+        ctx.lineTo(x + drift, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = -step; y < canvas.height + step; y += step) {
+        ctx.beginPath();
+        ctx.moveTo(0, y + drift * 0.28);
+        ctx.lineTo(canvas.width, y + drift * 0.28);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawBeatRings() {
+      const k = game.beatPulse;
+      if (k <= 0) return;
+      const rings = 3;
+
+      ctx.save();
+      for (let i = 0; i < rings; i++) {
+        const t = (k + i * 0.16) % 1;
+        const r = 42 + t * 440;
+        ctx.globalAlpha = (1 - t) * 0.19;
+        ctx.strokeStyle = i % 2 ? '#22f0ff' : '#ff2bbf';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawObstacles() {
+      for (const o of obstacles) {
+        const grad = ctx.createLinearGradient(o.x, o.y, o.x + o.w, o.y + o.h);
+        grad.addColorStop(0, o.color);
+        grad.addColorStop(1, '#0ff3');
+
+        ctx.save();
+        ctx.shadowBlur = 24;
+        ctx.shadowColor = o.color;
+        ctx.fillStyle = grad;
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.strokeRect(o.x + 0.5, o.y + 0.5, o.w - 1, o.h - 1);
+        ctx.restore();
+      }
+    }
+
+    function drawPlayer(time) {
+      const breathe = Math.sin(time * 5.4) * 0.8;
+      const pulse = game.beatPulse * 4.5 + player.glow * 5;
+      const r = player.r + pulse + breathe;
+
+      ctx.save();
+      ctx.shadowBlur = 28 + pulse * 2;
+      ctx.shadowColor = '#22f0ff';
+      ctx.fillStyle = '#22f0ff';
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.shadowBlur = 36;
+      ctx.shadowColor = '#ff2bbf';
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = '#ff2bbf';
+      ctx.lineWidth = 2.2;
+      ctx.beginPath();
+      ctx.arc(player.x, player.y, r + 4 + Math.sin(time * 9) * 1.6, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawParticles() {
+      for (const p of particles) {
+        const life = 1 - p.t / p.life;
+        ctx.save();
+        ctx.globalAlpha = life;
+        ctx.fillStyle = p.color;
+        ctx.shadowBlur = 16;
+        ctx.shadowColor = p.color;
+        ctx.fillRect(p.x, p.y, p.size, p.size);
+        ctx.restore();
+      }
+    }
+
+    function render(timeMs) {
+      const time = timeMs * 0.001;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = 'rgba(5, 7, 15, 0.4)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      drawGrid(time);
+      drawBeatRings();
+      drawObstacles();
+      drawParticles();
+      drawPlayer(time);
+
+      if (!running && !gameOver) {
+        const t = 0.5 + Math.sin(time * 2.7) * 0.5;
+        ctx.save();
+        ctx.globalAlpha = 0.45 + t * 0.4;
+        ctx.fillStyle = '#22f0ff';
+        ctx.textAlign = 'center';
+        ctx.font = '600 18px "Trebuchet MS", sans-serif';
+        ctx.fillText('Click to Start', canvas.width / 2, canvas.height * 0.8);
+        ctx.restore();
+      }
+    }
+
+    function tick(now) {
+      const dt = Math.min((now - game.lastTime) / 1000, 1 / 30);
+      game.lastTime = now;
+
+      if (running) {
+        update(dt);
+      }
+      render(now);
+
+      requestAnimationFrame(tick);
+    }
+
+    document.addEventListener('keydown', (e) => {
+      const k = e.key.toLowerCase();
+      if ([
+        'arrowleft', 'arrowright', 'arrowup', 'arrowdown',
+        'w', 'a', 's', 'd'
+      ].includes(k)) {
+        e.preventDefault();
+        keys.add(k);
+      }
+    }, { passive: false });
+
+    document.addEventListener('keyup', (e) => {
+      keys.delete(e.key.toLowerCase());
+    });
+
+    function handleStartClick() {
+      if (!running) {
+        resetGame();
+      }
+    }
+
+    startOverlay.addEventListener('click', handleStartClick);
+    gameOverOverlay.addEventListener('click', handleStartClick);
+
+    highPill.textContent = `High: ${Math.floor(highScore)}`;
+    game.lastTime = performance.now();
+    requestAnimationFrame(tick);
+  </script>
+</body>
+</html>
